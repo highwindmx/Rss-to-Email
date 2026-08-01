@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSS2Email 配置</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6f8; color: #222; }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid #e6e8eb; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 14px; }
+  .hint { color: #888; font-size: 12px; margin: 0 0 12px; }
+  label { display: block; font-size: 13px; color: #555; margin: 10px 0 4px; }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #d4d7db; border-radius: 6px; font-size: 13px; }
+  textarea { height: 64px; resize: vertical; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+  /* 订阅源列表 */
+  .feed-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .feed-row input.feed-title { width: 130px; flex: none; }
+  .feed-row input.feed-url { flex: 1; min-width: 160px; }
+  .feed-status { width: 18px; flex: none; text-align: center; font-size: 14px; color: #bbb; cursor: default; }
+  .feed-status.ok { color: #1a7f37; }
+  .feed-status.bad { color: #c0392b; }
+  .feed-status.wait { color: #e08e0b; }
+  .row-btn { border: none; cursor: pointer; border-radius: 6px; width: 32px; height: 32px; font-size: 14px; flex: none; line-height: 1; }
+  .row-btn.del { background: #fdecec; color: #c0392b; }
+  .row-btn.del:hover { background: #f7c5c5; }
+  .row-btn.test { background: #e7f0ff; color: #2f6fed; font-size: 12px; font-weight: 600; }
+  .row-btn.test:hover { background: #d3e3ff; }
+  .row-btn.test-wide { width: auto; padding: 0 14px; }
+  .row-btn:disabled { opacity: .6; cursor: default; }
+  .add-btn { margin-top: 4px; }
+  button { cursor: pointer; border: none; border-radius: 6px; padding: 9px 16px; font-size: 13px; font-weight: 600; }
+  .primary { background: #2f6fed; color: #fff; }
+  .ghost { background: #eef1f5; color: #333; }
+  .danger { background: #c0392b; color: #fff; }
+  .warn { background: #e08e0b; color: #fff; }
+  .ok { background: #e8f6ec; color: #1a7f37; padding: 8px 10px; border-radius: 6px; font-size: 13px; margin-top: 10px; }
+  .err { background: #fdecec; color: #c0392b; padding: 8px 10px; border-radius: 6px; font-size: 13px; margin-top: 10px; }
+  .testout { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 6px; font-size: 12px; overflow: auto; max-height: 320px; line-height: 1.6; }
+  .testout .sample { color: #94a3b8; padding-left: 12px; }
+  .runs { padding: 0; margin: 0; list-style: none; }
+  .runs li { font-size: 12px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #eee; margin-right: 6px; }
+  /* 左右两栏布局（配置左 / 运行右） */
+  .tabpane { display: block; }
+  .cols { display: flex; gap: 16px; align-items: flex-start; }
+  .cols > .pane { min-width: 0; }
+  .cols > .pane-config { flex: 1.25; }
+  .cols > .pane-run { flex: 1; }
+  @media (max-width: 860px) { .cols { flex-direction: column; } }
+  /* 运行统计 */
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .stat { background: #f8f9fb; border: 1px solid #eef0f3; border-radius: 8px; padding: 12px 14px; }
+  .stat-k { font-size: 12px; color: #888; margin-bottom: 6px; }
+  .stat-v { font-size: 18px; font-weight: 700; color: #222; }
+  .stat-v.cd { color: #2f6fed; }
+  .ctrl-row { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>RSS2Email 配置</h1>
+  <div class="sub">本地服务 · http://127.0.0.1:50000 · 配置存于 .env，运行状态存于 rss_state.db</div>
+
+  <div class="cols">
+  <!-- ============ 配置区（左） ============ -->
+  <div id="tab-config" class="pane pane-config tabpane">
+    <div class="card">
+      <h2>轮询与检查窗口</h2>
+      <p class="hint">这两项决定调度节拍：轮询间隔管「多久醒一次去抓取」，检查窗口管「多旧的条目才算新」。</p>
+      <div class="row">
+        <div>
+          <label>轮询间隔（分钟）</label>
+          <input id="POLL_INTERVAL_MINUTES" type="number" min="1">
+          <p class="hint" style="margin:6px 0 0">每隔多久唤醒一次去抓取 RSS。未到间隔的本次运行会被自动跳过（自节流）。</p>
+        </div>
+        <div>
+          <label>检查窗口（小时）</label>
+          <input id="CHECK_HOURS" type="number" min="1">
+          <p class="hint" style="margin:6px 0 0">只把「最近 N 小时」内发布的条目视为新条目；更早的自动标记为已读，避免一次性补发历史积压。建议 ≥ 轮询间隔。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>RSS 订阅源与测试</h2>
+      <label>RSS 订阅源（每行：左侧填「源标题」，将显示在邮件每条规定前的【】内，可选；右侧填链接。输入框失焦自动校验，每行「测」可单独测试）</label>
+      <div id="feedList"></div>
+      <div style="display:flex; gap:8px; margin-top:4px">
+        <button type="button" class="ghost add-btn" onclick="addFeed()">+ 添加 RSS 源</button>
+        <button type="button" id="testAllBtn" class="row-btn test test-wide" style="margin-left:auto" onclick="testAll()">测试所有源</button>
+      </div>
+      <p class="hint" style="margin-top:14px">测试结果如下（也可点每行「测」单独测试）：</p>
+      <div id="testOut" class="testout" style="margin-top:8px">（点击「测试所有源」或某行「测」）</div>
+    </div>
+
+    <div class="card">
+      <h2>发件邮箱（SMTP）</h2>
+      <div class="row">
+        <div>
+          <label>SMTP 服务器</label>
+          <input id="SMTP_HOST" placeholder="smtp.qq.com">
+        </div>
+        <div>
+          <label>端口</label>
+          <input id="SMTP_PORT" type="number">
+        </div>
+      </div>
+      <label>发件邮箱</label>
+      <input id="SENDER_EMAIL" placeholder="your_qq@qq.com">
+      <label>SMTP 授权码（非登录密码）</label>
+      <input id="SMTP_AUTH_CODE" type="password">
+      <label>目标邮箱（多个用逗号分隔）</label>
+      <input id="RECIPIENTS" placeholder="a@x.com,b@y.com">
+      <div style="margin-top:14px">
+        <button class="primary" onclick="saveConfig()">保存配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 运行区（右） ============ -->
+  <div id="tab-run" class="pane pane-run tabpane">
+    <div class="card">
+      <h2>运行状态</h2>
+      <div class="stats">
+        <div class="stat"><div class="stat-k">上次发送时间</div><div class="stat-v" id="st-last">—</div></div>
+        <div class="stat"><div class="stat-k">累计已发条目</div><div class="stat-v" id="st-total">—</div></div>
+        <div class="stat"><div class="stat-k">上次发送条数</div><div class="stat-v" id="st-lastcount">—</div></div>
+        <div class="stat"><div class="stat-k">距离下次发送</div><div class="stat-v cd" id="st-countdown">—</div></div>
+      </div>
+      <div class="ctrl-row">
+        <button class="ghost" onclick="loadStatus(true)">刷新状态</button>
+        <button class="primary" onclick="runNow()">立即运行（强制）</button>
+        <button class="warn" onclick="restartService()">重启服务</button>
+        <button class="danger" onclick="stopService()">停止服务</button>
+      </div>
+      <div id="msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>运行记录</h2>
+      <ul id="statusBox" class="runs"><li style="color:#999">（加载中…）</li></ul>
+    </div>
+  </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const FIELD_KEYS = ["POLL_INTERVAL_MINUTES","CHECK_HOURS","SMTP_HOST","SMTP_PORT","SENDER_EMAIL","SMTP_AUTH_CODE","RECIPIENTS"];
+
+// 运行状态（实时刷新）
+const state = { lastRun: null, intervalMin: 60 };
+
+function escapeAttr(s){ return (s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;"); }
+
+function addFeedRow(val = {title:"", url:""}) {
+  const list = $("feedList");
+  const row = document.createElement("div");
+  row.className = "feed-row";
+  row.innerHTML = `<span class="feed-status" title="校验状态"></span>` +
+    `<input class="feed-title" type="text" placeholder="源标题（可选）" value="${escapeAttr(val.title)}">` +
+    `<input class="feed-url" type="url" placeholder="https://example.com/feed.xml" value="${escapeAttr(val.url)}">` +
+    `<button type="button" class="row-btn test" title="测试此源" onclick="testOne(this)">测</button>` +
+    `<button type="button" class="row-btn del" title="删除" onclick="removeFeed(this)">✕</button>`;
+  const inp = row.querySelector(".feed-url");
+  inp.addEventListener("blur", () => validateFeed(inp));
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addFeed(); } });
+  list.appendChild(row);
+  return inp;
+}
+function addFeed() {
+  const inp = addFeedRow({title:"", url:""});
+  inp.focus();
+}
+function removeFeed(btn) {
+  const list = $("feedList");
+  if (list.children.length <= 1) {
+    list.firstChild.querySelector(".feed-url").value = "";
+    return;
+  }
+  btn.closest(".feed-row").remove();
+}
+function renderFeeds(feeds) {
+  $("feedList").innerHTML = "";
+  const arr = (feeds && feeds.length) ? feeds : [{title:"", url:""}];
+  arr.forEach(f => addFeedRow(f));
+}
+function getFeedRows() {
+  return [...document.querySelectorAll("#feedList .feed-row")].map(row => ({
+    title: row.querySelector(".feed-title").value.trim(),
+    url: row.querySelector(".feed-url").value.trim()
+  }));
+}
+function collectFeedSpecs() {
+  return getFeedRows().filter(r => r.url).map(r => (r.title ? r.title + "|" + r.url : r.url));
+}
+function collectUrls() {
+  return getFeedRows().map(r => r.url).filter(Boolean);
+}
+async function validateFeed(inp) {
+  const url = inp.value.trim();
+  const st = inp.closest(".feed-row").querySelector(".feed-status");
+  if (!url) { st.className = "feed-status"; st.textContent = ""; st.title = "校验状态"; return; }
+  st.className = "feed-status wait"; st.textContent = "…"; st.title = "校验中…";
+  try {
+    const r = await fetch("/api/check_feed", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({url})
+    }).then(x => x.json());
+    if (r.error) { st.className = "feed-status bad"; st.textContent = "✗"; st.title = "校验失败：" + r.error; }
+    else { st.className = "feed-status ok"; st.textContent = "✓";
+           st.title = (r.title || "（无标题）") + " · " + r.count + " 条" + (r.bozo ? " · 含容错警告" : ""); }
+  } catch (e) {
+    st.className = "feed-status bad"; st.textContent = "✗"; st.title = "校验请求失败";
+  }
+}
+
+function showMsg(text, isErr) {
+  $("msg").innerHTML = `<div class="${isErr ? 'err' : 'ok'}">${text}</div>`;
+}
+async function loadConfig() {
+  const r = await fetch("/api/config").then(x => x.json());
+  renderFeeds(r.feeds);
+  for (const k of FIELD_KEYS) {
+    if (r[k] !== undefined && $(k)) $(k).value = r[k];
+  }
+}
+async function saveConfig() {
+  const payload = { RSS_URLS: collectFeedSpecs().join(",") };
+  for (const k of FIELD_KEYS) {
+    if ($(k)) payload[k] = $(k).value;
+  }
+  const r = await fetch("/api/config", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)
+  }).then(x => x.json());
+  showMsg(r.ok ? "配置已保存" : "保存失败", !r.ok);
+}
+function escapeHtml(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function renderTestResults(results) {
+  const box = $("testOut");
+  if (!results.length) { box.textContent = "（无源可测）"; return; }
+  let html = "";
+  results.forEach(r => {
+    if (r.error) {
+      html += `<div class="err">✗ ${escapeHtml(r.url)}<br>&nbsp;&nbsp;${escapeHtml(r.error)}</div>`;
+    } else {
+      const warn = r.bozo ? " ⚠ 含 XML 容错警告" : "";
+      html += `<div class="ok">✓ ${escapeHtml(r.title || "（无标题）")} — ${r.count} 条${warn}<br>&nbsp;&nbsp;${escapeHtml(r.url)}</div>`;
+      (r.sample || []).slice(0, 3).forEach(s => { html += `<div class="sample">· ${escapeHtml(s.title)}</div>`; });
+    }
+  });
+  box.innerHTML = html;
+}
+
+async function testAll() {
+  const feeds = collectUrls();
+  if (!feeds.length) { showMsg("没有可测试的 RSS 源", true); return; }
+  const btn = document.getElementById("testAllBtn");
+  const box = document.getElementById("testOut");
+  btn.disabled = true; btn.textContent = "测试中…";
+  box.textContent = "正在测试 " + feeds.length + " 个源…（请稍候，逐个抓取网络）";
+  document.querySelectorAll("#feedList .feed-row").forEach(row => {
+    const st = row.querySelector(".feed-status");
+    st.className = "feed-status wait"; st.textContent = "…"; st.title = "测试中…";
+  });
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    const r = await fetch("/api/test", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({urls: feeds}), signal: ctrl.signal
+    }).then(x => x.json());
+    clearTimeout(timer);
+    const results = r.results || [];
+    document.querySelectorAll("#feedList .feed-row").forEach(row => {
+      const url = row.querySelector(".feed-url").value.trim();
+      const st = row.querySelector(".feed-status");
+      const hit = results.find(x => x.url === url);
+      if (!hit) { st.className="feed-status"; st.textContent=""; st.title="校验状态"; return; }
+      if (hit.error) { st.className="feed-status bad"; st.textContent="✗"; st.title="抓取失败："+hit.error; }
+      else { st.className="feed-status ok"; st.textContent="✓";
+             st.title=(hit.title||"（无标题）")+" · "+hit.count+" 条"+(hit.bozo?" · 含容错警告":""); }
+    });
+    renderTestResults(results);
+  } catch (e) {
+    const msg = (e && e.name === "AbortError") ? "测试超时（30 秒内部分源未响应）"
+                                              : "测试请求失败：" + (e && e.message ? e.message : e);
+    box.textContent = msg;
+    document.querySelectorAll("#feedList .feed-row").forEach(row => {
+      const st = row.querySelector(".feed-status");
+      st.className="feed-status bad"; st.textContent="✗"; st.title=msg;
+    });
+  } finally {
+    btn.disabled = false; btn.textContent = "测试所有源";
+  }
+}
+async function testOne(btn) {
+  const row = btn.closest(".feed-row");
+  const inp = row.querySelector(".feed-url");
+  const url = inp.value.trim();
+  const st = row.querySelector(".feed-status");
+  if (!url) { st.className="feed-status"; st.textContent=""; st.title="请先填写 URL"; return; }
+  st.className="feed-status wait"; st.textContent="…"; st.title="测试中…";
+  try {
+    const r = await fetch("/api/test", {
+      method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({urls:[url]})
+    }).then(x => x.json());
+    const hit = (r.results || [])[0];
+    if (!hit || hit.error) {
+      st.className="feed-status bad"; st.textContent="✗"; st.title="测试失败："+(hit?hit.error:"无返回");
+    } else {
+      st.className="feed-status ok"; st.textContent="✓";
+      st.title=(hit.title||"（无标题）")+" · "+hit.count+" 条"+(hit.bozo?" · 含容错警告":"");
+    }
+    renderTestResults(r.results || []);
+  } catch (e) {
+    st.className="feed-status bad"; st.textContent="✗"; st.title="测试请求失败";
+  }
+}
+
+// ---------- 运行 Tab ----------
+async function runNow() {
+  let r;
+  try {
+    r = await fetch("/api/run?force=1", {method:"POST"}).then(x => x.json());
+  } catch (e) {
+    showMsg("运行请求失败：服务可能未启动或已停止，请双击 start_web.bat 重启。", true);
+    return;
+  }
+  let msg, isErr = (r.status === "error");
+  if (r.status === "sent") msg = `已发送 ${r.count} 条到邮箱。`;
+  else if (r.status === "none") msg = "已强制检查：当前没有新条目，未发送邮件。";
+  else if (r.status === "skip") msg = "被节流跳过（未到轮询间隔）—— 说明强制参数未生效，请重启服务（双击 start_web.bat）。";
+  else if (r.status === "error") msg = "运行出错：" + (r.detail || "");
+  else msg = "运行结果：" + JSON.stringify(r);
+  showMsg(msg, isErr);
+  setTimeout(loadStatus, 800);
+}
+async function loadStatus(manual=false) {
+  try {
+    const r = await fetch("/api/status").then(x => x.json());
+    state.lastRun = r.last_run;
+  state.intervalMin = r.poll_interval_minutes || 60;
+  $("st-last").textContent = r.last_run ? new Date(r.last_run*1000).toLocaleString() : "尚未运行";
+  $("st-total").textContent = (r.sent_total ?? 0) + " 条";
+  const lastSent = (r.runs || []).find(x => x.status === "sent");
+  $("st-lastcount").textContent = lastSent ? (lastSent.count + " 条") : "—";
+  let html = "";
+  for (const x of (r.runs || [])) {
+    const t = new Date(x.ts*1000).toLocaleString();
+    html += `<li><span class="tag">${x.type}</span><span class="tag">${x.status}</span> ${t} · ${x.detail}</li>`;
+  }
+  $("statusBox").innerHTML = html || '<li style="color:#999">暂无记录</li>';
+    tickCountdown();
+    if (manual) showMsg("已刷新状态 · " + new Date().toLocaleTimeString(), false);
+  } catch (e) {
+    if (manual) showMsg("刷新失败：服务可能未启动或已停止，请双击 start_web.bat 重启。", true);
+  }
+}
+function tickCountdown() {
+  const el = $("st-countdown");
+  if (!state.lastRun) { el.textContent = "尚未运行"; return; }
+  const next = state.lastRun + state.intervalMin * 60;
+  let rem = Math.floor(next - Date.now()/1000);
+  if (rem <= 0) { el.textContent = "即将发送"; return; }
+  const m = Math.floor(rem/60), s = rem % 60;
+  el.textContent = `${m} 分 ${String(s).padStart(2,"0")} 秒`;
+}
+async function stopService() {
+  if (!confirm("确定停止 RSS2Email 服务？停止后需重新双击 start_web.bat 启动。")) return;
+  const r = await fetch("/api/stop", {method:"POST"}).then(x => x.json());
+  showMsg("已发送停止指令：" + JSON.stringify(r), false);
+  setTimeout(() => showMsg("服务已停止。请双击 start_web.bat 重新启动。", false), 1500);
+}
+async function restartService() {
+  const r = await fetch("/api/restart", {method:"POST"}).then(x => x.json());
+  showMsg("已发送重启指令：" + JSON.stringify(r), false);
+  setTimeout(() => {
+    loadConfig();
+    loadStatus();
+    showMsg("服务已重启，配置已重新加载。", false);
+  }, 2200);
+}
+
+// 初始化 + 自动刷新
+loadConfig();
+loadStatus();
+setInterval(tickCountdown, 1000);
+setInterval(loadStatus, 5000);
+</script>
+</body>
+</html>

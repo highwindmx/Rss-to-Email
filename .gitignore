@@ -1,0 +1,27 @@
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ---- 密钥与本地配置（切勿提交）----
+.env
+.env.local
+
+# ---- 运行时状态 ----
+rss_state.db
+*.db
+*.log
+app.log
+
+# ---- 代理/工具目录 ----
+.workbuddy/
+.archive/
+
+# ---- 临时/演示产物 ----
+_test_*.py
+email_demo.html
+
+# ---- 系统 ----
+Thumbs.db
+.DS_Store

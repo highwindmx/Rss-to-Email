@@ -1,0 +1,4 @@
+flask>=3.1
+apscheduler>=3.11
+feedparser>=6.0
+python-dotenv>=1.0
