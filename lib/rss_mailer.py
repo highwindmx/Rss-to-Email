@@ -353,6 +353,10 @@ def send(items, cfg):
     body = (
         '<div style="font-family:-apple-system,Segoe UI,Microsoft YaHei,sans-serif">'
         '<ol style="padding-left:0;list-style:none;margin:0">' + "".join(rows) + '</ol>'
+        '<div style="margin-top:20px;padding-top:14px;border-top:1px solid #eee;'
+        'color:#666;font-size:13px;line-height:1.9">'
+        '此致<br>祝好<br>'
+        '<span style="color:#999">—— RSS2Email 自动推送</span></div>'
         '</div>'
     )
     msg = MIMEMultipart()
