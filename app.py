@@ -5,6 +5,9 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 import rss_mailer as core
 import time, threading
+from werkzeug.serving import make_server
+
+SERVER = None  # 主服务引用；重启时先关闭监听 socket 再 execv，避免 Windows 下多进程抢端口
 
 BASE = Path(__file__).parent
 STATIC = BASE / "static"
@@ -82,7 +85,18 @@ def api_stop():
 @app.route("/api/restart", methods=["POST"])
 def api_restart():
     me = os.path.abspath(__file__)
-    _delayed_exit(1.0, lambda: os.execv(sys.executable, [sys.executable, me]))
+
+    def _do_restart():
+        # 先关闭监听 socket：Windows 下 os.execv 不会自动释放旧 socket，
+        # 不关会导致新旧进程同时 LISTEN 同一端口、连接被错误分派而超时
+        try:
+            if SERVER is not None:
+                SERVER.socket.close()
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable, me])
+
+    _delayed_exit(1.0, _do_restart)
     return jsonify({"ok": True, "action": "restart"})
 
 
@@ -90,4 +104,6 @@ if __name__ == "__main__":
     sched = BackgroundScheduler()
     sched.add_job(core.run_once, "interval", minutes=1)
     sched.start()
-    app.run(host="127.0.0.1", port=int(os.environ.get("WEB_PORT", 50000)), debug=False)
+    port = int(os.environ.get("WEB_PORT", 50000))
+    SERVER = make_server("127.0.0.1", port, app)
+    SERVER.serve_forever()
