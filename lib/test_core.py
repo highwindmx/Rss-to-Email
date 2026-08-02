@@ -221,6 +221,27 @@ def test_run_once_skip_incomplete(tmp_db, no_dotenv, monkeypatch):
     assert res["status"] == "skip"
 
 
+# ---------- get_status: last_send 仅在实际发信时更新 ----------
+def test_last_send_only_on_sent(tmp_db, no_dotenv, monkeypatch):
+    _seed_complete_config(monkeypatch)
+    # 无新条目 → none：last_run 应更新，但 last_send 必须保持 None
+    monkeypatch.setattr(core, "fetch_new", lambda feeds, ch: [])
+    monkeypatch.setattr(core, "send", lambda items, cfg: None)
+    res = core.run_once(force=True)
+    assert res["status"] == "none"
+    st = core.get_status()
+    assert st["last_run"] is not None
+    assert st["last_send"] is None
+
+    # 有新条目 → sent：last_send 应被写入
+    monkeypatch.setattr(core, "fetch_new", lambda feeds, ch: [
+        {"e": {"id": "g9", "link": "http://x/g9", "title": "t"}, "title": "S"}])
+    res2 = core.run_once(force=True)
+    assert res2["status"] == "sent"
+    st2 = core.get_status()
+    assert st2["last_send"] is not None
+
+
 # ---------- _dedup_by_guid ----------
 def test_dedup_by_guid(tmp_db, no_dotenv, monkeypatch):
     # 构造 3 个 items，其中 2 个相同 guid（g1 出现两次），应去重为 2 个且保留首次出现

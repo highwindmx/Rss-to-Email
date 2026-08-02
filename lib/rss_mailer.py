@@ -148,6 +148,7 @@ def log_run(rtype, count, status, detail):
 def get_status():
     conn = _conn()
     row = conn.execute("SELECT v FROM meta WHERE k='last_run'").fetchone()
+    row_send = conn.execute("SELECT v FROM meta WHERE k='last_send'").fetchone()
     sent_total = conn.execute("SELECT COUNT(*) FROM sent").fetchone()[0]
     runs = conn.execute(
         "SELECT ts,type,count,status,detail FROM runs ORDER BY id DESC LIMIT 20").fetchall()
@@ -158,6 +159,7 @@ def get_status():
         poll = 60
     return {
         "last_run": float(row[0]) if row else None,
+        "last_send": float(row_send[0]) if row_send else None,
         "sent_total": sent_total,
         "poll_interval_minutes": poll,
         "runs": [{"ts": r[0], "type": r[1], "count": r[2], "status": r[3], "detail": r[4]}
@@ -179,6 +181,18 @@ def should_run():
 def mark_run():
     conn = _conn()
     conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES ('last_run', ?)", (str(time.time()),))
+    conn.commit()
+    conn.close()
+
+
+def mark_send():
+    """仅在「实际有条目发出」时更新 last_send，作为前端「上次发送时间」的权威来源。
+
+    与 mark_run() 区分：last_run 记录最近一次执行的抓取（含无新条目的 none），
+    用于调度节拍（倒计时）；last_send 只记录真正发信的时刻，避免空跑误导用户。
+    """
+    conn = _conn()
+    conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES ('last_send', ?)", (str(time.time()),))
     conn.commit()
     conn.close()
 
@@ -376,6 +390,7 @@ def run_once(force=False):
             conn.commit()
             conn.close()
             log_run("run", len(items), "sent", f"已发送 {len(items)} 条")
+            mark_send()
             res = {"status": "sent", "count": len(items)}
         else:
             log_run("run", 0, "none", "无新条目")

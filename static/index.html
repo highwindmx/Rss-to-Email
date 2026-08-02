@@ -68,6 +68,15 @@
   .warnbar { display: none; background: #fff7d6; color: #8a6d00; border: 1px solid #f0d98a;
              border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
   .warnbar.show { display: block; }
+  /* 运行出错横幅 */
+  .errbar { display: none; background: #fdecec; color: #c0392b; border: 1px solid #f0b8b0;
+            border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
+  .errbar.show { display: block; }
+  /* 运行记录状态标签按状态着色 */
+  .tag.err { background: #fdecec; color: #c0392b; }
+  .tag.sent { background: #e8f6ec; color: #1a7f37; }
+  .tag.none, .tag.skip { background: #eef1f5; color: #666; }
+  .tag.ok { background: #e7f0ff; color: #2f6fed; }
 </style>
 </head>
 <body>
@@ -138,6 +147,7 @@
     <div class="card">
       <h2>运行状态</h2>
       <div id="warnbar" class="warnbar"></div>
+      <div id="errbar" class="errbar"></div>
       <div class="stats">
         <div class="stat"><div class="stat-k">上次发送时间</div><div class="stat-v" id="st-last">—</div></div>
         <div class="stat"><div class="stat-k">累计已发条目</div><div class="stat-v" id="st-total">—</div></div>
@@ -413,16 +423,30 @@ async function loadStatus(manual=false) {
     setBackendStatus(true);
     state.lastRun = r.last_run;
     state.intervalMin = r.poll_interval_minutes || 60;
-    $("st-last").textContent = r.last_run ? new Date(r.last_run*1000).toLocaleString() : "尚未运行";
+    // 「上次发送时间」展示 last_send（仅实际发信时更新），而非 last_run（含空跑），避免误导
+    $("st-last").textContent = r.last_send ? new Date(r.last_send*1000).toLocaleString() : "尚未发送";
     $("st-total").textContent = (r.sent_total ?? 0) + " 条";
     const lastSent = (r.runs || []).find(x => x.status === "sent");
     $("st-lastcount").textContent = lastSent ? (lastSent.count + " 条") : "—";
+    const runs = r.runs || [];
     let html = "";
-    for (const x of (r.runs || [])) {
+    for (const x of runs) {
       const t = new Date(x.ts*1000).toLocaleString();
-      html += `<li><span class="tag">${x.type}</span><span class="tag">${x.status}</span> ${t} · ${x.detail}</li>`;
+      const sc = ({error:"err", sent:"sent", none:"none", skip:"skip", ok:"ok"})[x.status] || "";
+      html += `<li><span class="tag">${x.type}</span><span class="tag ${sc}">${x.status}</span> ${t} · ${x.detail}</li>`;
     }
     $("statusBox").innerHTML = html || '<li style="color:#999">暂无记录</li>';
+    // 错误横幅：最近一次运行出错且之后无成功发送 → 顶部醒目提示错误详情
+    const errbar = $("errbar");
+    const errIdx = runs.findIndex(x => x.status === "error");
+    const sentIdx = runs.findIndex(x => x.status === "sent");
+    if (errIdx !== -1 && (sentIdx === -1 || errIdx < sentIdx)) {
+      const e = runs[errIdx];
+      errbar.textContent = "最近一次运行出错：" + e.detail + "（" + new Date(e.ts*1000).toLocaleString() + "）";
+      errbar.classList.add("show");
+    } else {
+      errbar.classList.remove("show");
+    }
     tickCountdown();
     if (manual) showMsg("已刷新状态 · " + new Date().toLocaleTimeString(), false);
   } catch (e) {
