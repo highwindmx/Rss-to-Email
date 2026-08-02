@@ -219,3 +219,31 @@ def test_run_once_skip_incomplete(tmp_db, no_dotenv, monkeypatch):
 
     res = core.run_once(force=True)
     assert res["status"] == "skip"
+
+
+# ---------- _dedup_by_guid ----------
+def test_dedup_by_guid(tmp_db, no_dotenv, monkeypatch):
+    # 构造 3 个 items，其中 2 个相同 guid（g1 出现两次），应去重为 2 个且保留首次出现
+    items = [
+        {"e": {"id": "g1", "link": "http://x/g1", "title": "first"}, "title": "S"},
+        {"e": {"id": "g1", "link": "http://x/g1", "title": "dup"}, "title": "S"},
+        {"e": {"id": "g2", "link": "http://x/g2", "title": "second"}, "title": "S"},
+    ]
+    result = core._dedup_by_guid(items)
+    assert len(result) == 2
+    # 保留首次出现：title 为 first 的条目被保留，dup 被丢弃
+    assert result[0]["e"]["title"] == "first"
+    assert result[1]["e"]["title"] == "second"
+
+
+def test_dedup_by_guid_falls_back_to_link(tmp_db, no_dotenv, monkeypatch):
+    # 无 id 时以 link 作 guid 去重
+    items = [
+        {"e": {"link": "http://x/a"}, "title": "S"},
+        {"e": {"link": "http://x/a"}, "title": "S"},
+        {"e": {"link": "http://x/b"}, "title": "S"},
+    ]
+    result = core._dedup_by_guid(items)
+    assert len(result) == 2
+    assert result[0]["e"]["link"] == "http://x/a"
+    assert result[1]["e"]["link"] == "http://x/b"

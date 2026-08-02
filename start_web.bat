@@ -9,7 +9,7 @@ for %%a in (%*) do if /i "%%a"=="--show" set "SHOWN=1"
 REM 端口单来源：WEB_PORT 同时驱动 PORT / URL
 set "VENV_PY=.\.venv\Scripts\python.exe"
 set "VENV_PYW=.\.venv\Scripts\pythonw.exe"
-set "WEB_PORT=50000"
+if not defined WEB_PORT set "WEB_PORT=50000"
 set "PORT=%WEB_PORT%"
 set "URL=http://127.0.0.1:%WEB_PORT%"
 set "LOG=app.log"

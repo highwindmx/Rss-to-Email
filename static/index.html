@@ -426,12 +426,8 @@ async function loadStatus(manual=false) {
     tickCountdown();
     if (manual) showMsg("已刷新状态 · " + new Date().toLocaleTimeString(), false);
   } catch (e) {
-    // 失败计数：首次失败（含首屏加载）直接置阈值，立即判离线
-    if (failCount === 0) {
-      failCount = FAIL_THRESHOLD;
-    } else {
-      failCount += 1;
-    }
+    // 失败计数：统一累加，连续 FAIL_THRESHOLD 次才判离线，避免单次瞬断误报
+    failCount += 1;
     if (failCount >= FAIL_THRESHOLD) setBackendStatus(false);
     if (manual) showMsg("刷新失败：服务可能未启动或已停止，请双击 start_web.bat 重启。", true);
   }

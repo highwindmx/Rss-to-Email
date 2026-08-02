@@ -250,6 +250,23 @@ def _fetch_one(feed, cutoff, first_run):
         return {"new": [], "old": []}
 
 
+def _dedup_by_guid(items):
+    """按 guid(id 或 link) 去重，保留首次出现的条目。避免单源内重复 guid 导致同一邮件重复发送。
+
+    - items 元素为 {"e": <feedparser entry>, "title": <源标题>} 字典。
+    - guid 提取方式与 run_once 落库处保持一致：it["e"].get("id") or it["e"].get("link")。
+    - 纯函数，不触网、不读写数据库，便于单元测试。
+    """
+    seen, out = set(), []
+    for it in items:
+        g = it["e"].get("id") or it["e"].get("link")
+        if g in seen:
+            continue
+        seen.add(g)
+        out.append(it)
+    return out
+
+
 def fetch_new(feeds, check_hours):
     """并发抓取所有源的新条目。
 
@@ -350,6 +367,7 @@ def run_once(force=False):
                 log_run("run", 0, "skip", msg)
             return {"status": "skip", "detail": msg}
         items = fetch_new(cfg["feeds"], cfg["CHECK_HOURS"])
+        items = _dedup_by_guid(items)
         if items:
             send(items, cfg)
             conn = _conn()
