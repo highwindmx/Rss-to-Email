@@ -323,6 +323,50 @@ def test_run_once_skip_incomplete(tmp_db, no_dotenv, monkeypatch):
     assert res["status"] == "skip"
 
 
+# ---------- 检查窗口按模式隔离（CHECK_HOURS / CHECK_HOURS_FIXED_TIMES）----------
+def test_load_config_check_hours_fixed_times_isolated(tmp_db, no_dotenv, monkeypatch):
+    """每日多时点的检查窗口独立于固定间隔，二者各自存储。"""
+    monkeypatch.setenv("CHECK_HOURS", "24")
+    monkeypatch.setenv("CHECK_HOURS_FIXED_TIMES", "72")
+    monkeypatch.setenv("SCHEDULE_MODE", "fixed_times")
+    cfg = core.load_config()
+    assert cfg["CHECK_HOURS"] == 24
+    assert cfg["CHECK_HOURS_FIXED_TIMES"] == 72
+
+
+def test_load_config_check_hours_fixed_times_defaults_to_check_hours(tmp_db, no_dotenv, monkeypatch):
+    """未单独设置 CHECK_HOURS_FIXED_TIMES → 回落到 CHECK_HOURS（向后兼容）。"""
+    monkeypatch.setenv("CHECK_HOURS", "24")
+    cfg = core.load_config()
+    assert cfg["CHECK_HOURS_FIXED_TIMES"] == 24
+
+
+def test_run_once_uses_fixed_check_hours_in_fixed_times_mode(tmp_db, no_dotenv, monkeypatch):
+    """fixed_times 模式 → run_once 将 CHECK_HOURS_FIXED_TIMES 传给 fetch_new。"""
+    _seed_complete_config(monkeypatch)
+    monkeypatch.setenv("SCHEDULE_MODE", "fixed_times")
+    monkeypatch.setenv("CHECK_HOURS", "24")
+    monkeypatch.setenv("CHECK_HOURS_FIXED_TIMES", "72")
+    captured = {}
+    monkeypatch.setattr(core, "fetch_new", lambda feeds, ch: captured.update({"ch": ch}) or [])
+    monkeypatch.setattr(core, "send", lambda items, cfg: None)
+    core.run_once(force=True)
+    assert captured["ch"] == 72
+
+
+def test_run_once_uses_interval_check_hours_in_interval_mode(tmp_db, no_dotenv, monkeypatch):
+    """interval 模式 → run_once 仍使用 CHECK_HOURS（与多时点设置隔离）。"""
+    _seed_complete_config(monkeypatch)
+    monkeypatch.setenv("SCHEDULE_MODE", "interval")
+    monkeypatch.setenv("CHECK_HOURS", "24")
+    monkeypatch.setenv("CHECK_HOURS_FIXED_TIMES", "72")
+    captured = {}
+    monkeypatch.setattr(core, "fetch_new", lambda feeds, ch: captured.update({"ch": ch}) or [])
+    monkeypatch.setattr(core, "send", lambda items, cfg: None)
+    core.run_once(force=True)
+    assert captured["ch"] == 24
+
+
 # ---------- get_status: last_send 仅在实际发信时更新 ----------
 def test_last_send_only_on_sent(tmp_db, no_dotenv, monkeypatch):
     _seed_complete_config(monkeypatch)

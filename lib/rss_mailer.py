@@ -63,17 +63,22 @@ def load_config():
     raw = os.environ.get("RSS_URLS") or os.environ.get("RSS_URL", "")
     feeds = _parse_feeds(raw)
     urls = [f["url"] for f in feeds]
+    poll = _safe_int(os.environ.get("POLL_INTERVAL_MINUTES", 60), 60)
+    check_hours = _safe_int(os.environ.get("CHECK_HOURS", 24), 24)
+    # 每日多时点模式的检查窗口，与固定间隔模式隔离；未单独设置时回落到 CHECK_HOURS（向后兼容）
+    check_hours_fixed = _safe_int(os.environ.get("CHECK_HOURS_FIXED_TIMES", ""), check_hours)
     return {
         "RSS_URLS": raw,
         "feeds": feeds,
         "urls": urls,
-        "POLL_INTERVAL_MINUTES": _safe_int(os.environ.get("POLL_INTERVAL_MINUTES", 60), 60),
+        "POLL_INTERVAL_MINUTES": poll,
         "SMTP_HOST": os.environ.get("SMTP_HOST", ""),
         "SMTP_PORT": _safe_int(os.environ.get("SMTP_PORT", 465), 465),
         "SENDER_EMAIL": os.environ.get("SENDER_EMAIL", ""),
         "SMTP_AUTH_CODE": os.environ.get("SMTP_AUTH_CODE", ""),
         "RECIPIENTS": os.environ.get("RECIPIENTS", ""),
-        "CHECK_HOURS": _safe_int(os.environ.get("CHECK_HOURS", 24), 24),
+        "CHECK_HOURS": check_hours,
+        "CHECK_HOURS_FIXED_TIMES": check_hours_fixed,
         "SCHEDULE_MODE": (os.environ.get("SCHEDULE_MODE", "interval") or "interval").strip(),
         "SCHEDULE_TIMES": os.environ.get("SCHEDULE_TIMES", "") or "",
     }
@@ -501,7 +506,10 @@ def run_once(force=False):
             if _should_log_skip():
                 log_run("run", 0, "skip", msg)
             return {"status": "skip", "detail": msg}
-        items = fetch_new(cfg["feeds"], cfg["CHECK_HOURS"])
+        # 检查窗口按触发模式隔离：每日多时点用 CHECK_HOURS_FIXED_TIMES，固定间隔用 CHECK_HOURS
+        mode = (cfg.get("SCHEDULE_MODE", "interval") or "interval").strip()
+        check_hours = cfg["CHECK_HOURS_FIXED_TIMES"] if mode == "fixed_times" else cfg["CHECK_HOURS"]
+        items = fetch_new(cfg["feeds"], check_hours)
         items = _dedup_by_guid(items)
         if items:
             send(items, cfg)

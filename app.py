@@ -15,7 +15,7 @@ app = Flask(__name__, static_folder=str(STATIC))
 
 ALLOWED = {"RSS_URLS", "POLL_INTERVAL_MINUTES", "SMTP_HOST", "SMTP_PORT",
            "SENDER_EMAIL", "SMTP_AUTH_CODE", "RECIPIENTS", "CHECK_HOURS",
-           "SCHEDULE_MODE", "SCHEDULE_TIMES"}
+           "CHECK_HOURS_FIXED_TIMES", "SCHEDULE_MODE", "SCHEDULE_TIMES"}
 
 
 @app.route("/")

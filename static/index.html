@@ -25,7 +25,11 @@
   .feed-status.ok { color: #1a7f37; }
   .feed-status.bad { color: #c0392b; }
   .feed-status.wait { color: #e08e0b; }
-  .row-btn { border: none; cursor: pointer; border-radius: 6px; width: 32px; height: 32px; font-size: 14px; flex: none; line-height: 1; }
+  .row-btn { border: none; cursor: pointer; border-radius: 6px; width: 32px; height: 32px; font-size: 14px; flex: none; line-height: 1;
+             display: inline-flex; align-items: center; justify-content: center; }
+  /* 触发方式子窗格（固定间隔 / 每日多时点） */
+  .subpane { border: 1px solid #eef0f3; border-radius: 8px; padding: 14px; background: #fafbfc; margin-top: 10px; }
+  .subpane-title { font-size: 13px; font-weight: 700; color: #333; margin-bottom: 8px; }
   .row-btn.del { background: #fdecec; color: #c0392b; }
   .row-btn.del:hover { background: #f7c5c5; }
   .row-btn.test { background: #e7f0ff; color: #2f6fed; font-size: 12px; font-weight: 600; }
@@ -89,42 +93,44 @@
   <!-- ============ 配置区（左） ============ -->
   <div id="tab-config" class="pane pane-config tabpane">
     <div class="card">
-      <h2>轮询与检查窗口</h2>
-      <p class="hint">这两项决定调度节拍：轮询间隔管「多久醒一次去抓取」，检查窗口管「多旧的条目才算新」。</p>
-      <div class="row">
-        <div>
-          <label>轮询间隔（分钟）</label>
-          <input id="POLL_INTERVAL_MINUTES" type="number" min="1">
-          <p class="hint" style="margin:6px 0 0">每隔多久唤醒一次去抓取 RSS。未到间隔的本次运行会被自动跳过（自节流）。</p>
-        </div>
-        <div>
-          <label>检查窗口（小时）</label>
-          <input id="CHECK_HOURS" type="number" min="1">
-          <p class="hint" style="margin:6px 0 0">只把「最近 N 小时」内发布的条目视为新条目；更早的自动标记为已读，避免一次性补发历史积压。建议 ≥ 轮询间隔。</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
       <h2>触发方式</h2>
-      <p class="hint">决定「何时去抓取并推送」：固定间隔按分钟轮询；每日多时点则在你指定的时刻强制抓取（不受间隔限制）。两种模式二选一。</p>
-      <div class="row">
-        <div>
-          <label>触发模式</label>
-          <select id="SCHEDULE_MODE">
-            <option value="interval">固定间隔（按分钟轮询）</option>
-            <option value="fixed_times">每日多时点（指定时刻）</option>
-          </select>
+      <p class="hint">决定「何时去抓取并推送」：固定间隔按分钟轮询；每日多时点则在你指定的时刻强制抓取（不受间隔限制）。两种模式二选一，下方子窗格随所选模式切换。</p>
+      <label>触发模式</label>
+      <select id="SCHEDULE_MODE">
+        <option value="interval">固定间隔（按分钟轮询）</option>
+        <option value="fixed_times">每日多时点（指定时刻）</option>
+      </select>
+
+      <!-- 子窗格：固定间隔（仅此模式显示） -->
+      <div id="intervalBox" class="subpane">
+        <div class="subpane-title">固定间隔设置</div>
+        <p class="hint">按「轮询间隔」周期性唤醒抓取；只把「检查窗口」内发布的新条目视为新内容。</p>
+        <div class="row">
+          <div>
+            <label>轮询间隔（分钟）</label>
+            <input id="POLL_INTERVAL_MINUTES" type="number" min="1">
+            <p class="hint" style="margin:6px 0 0">每隔多久唤醒一次去抓取 RSS。未到间隔的本次运行会被自动跳过（自节流）。</p>
+          </div>
+          <div>
+            <label>检查窗口（小时）</label>
+            <input id="CHECK_HOURS" type="number" min="1">
+            <p class="hint" style="margin:6px 0 0">只把「最近 N 小时」内发布的条目视为新条目；更早的自动标记为已读，避免一次性补发历史积压。建议 ≥ 轮询间隔。</p>
+          </div>
         </div>
       </div>
-      <div id="intervalBox" style="margin-top:10px">
-        <p class="hint">当前为「固定间隔」模式：按上方「轮询间隔（分钟）」周期性抓取。</p>
-      </div>
-      <div id="fixedTimesBox" style="display:none; margin-top:10px">
+
+      <!-- 子窗格：每日多时点（仅此模式显示） -->
+      <div id="fixedTimesBox" class="subpane" style="display:none">
+        <div class="subpane-title">每日多时点设置</div>
         <label>每日定时时点（多个，24 小时制 HH:MM）</label>
         <div id="scheduleTimes"></div>
         <button type="button" class="ghost add-btn" style="margin-top:6px" onclick="addTimeRow()">+ 添加时点</button>
         <p class="hint" style="margin-top:8px">每到指定时刻强制抓取并推送一次（不受轮询间隔节流；若服务刚好宕机错过，恢复后会自动补跑一次）。</p>
+        <div style="margin-top:12px">
+          <label>检查窗口（小时）</label>
+          <input id="CHECK_HOURS_FIXED_TIMES" type="number" min="1" placeholder="未设置则沿用固定间隔（当前 24 小时）">
+          <p class="hint" style="margin:6px 0 0">只把「最近 N 小时」内发布的条目视为新条目；更早的自动标记为已读。此设置独立于固定间隔模式；留空则沿用固定间隔模式的检查窗口（当前 <span id="ftCheckHint">24</span> 小时）。</p>
+        </div>
       </div>
     </div>
 
@@ -197,7 +203,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const FIELD_KEYS = ["POLL_INTERVAL_MINUTES","CHECK_HOURS","SMTP_HOST","SMTP_PORT","SENDER_EMAIL","RECIPIENTS","SCHEDULE_MODE"];
+const FIELD_KEYS = ["POLL_INTERVAL_MINUTES","CHECK_HOURS","CHECK_HOURS_FIXED_TIMES","SMTP_HOST","SMTP_PORT","SENDER_EMAIL","RECIPIENTS","SCHEDULE_MODE"];
 
 // 运行状态（实时刷新）
 const state = { lastRun: null, intervalMin: 60, nextRun: null, scheduleMode: "interval" };
@@ -295,6 +301,14 @@ async function validateFeed(inp) {
 function showMsg(text, isErr) {
   $("msg").innerHTML = `<div class="${isErr ? 'err' : 'ok'}">${text}</div>`;
 }
+// 多时点检查窗口提示：未设置时沿用固定间隔模式的检查窗口（CHECK_HOURS）
+function updateFixedTimesHint(chk) {
+  const v = (chk !== null && !isNaN(chk) && chk > 0) ? chk : 24;
+  const hint = $("ftCheckHint");
+  if (hint) hint.textContent = v;
+  const inp = $("CHECK_HOURS_FIXED_TIMES");
+  if (inp) inp.placeholder = `未设置则沿用固定间隔（当前 ${v} 小时）`;
+}
 async function loadConfig() {
   const r = await fetch("/api/config").then(x => x.json());
   renderFeeds(r.feeds);
@@ -302,11 +316,12 @@ async function loadConfig() {
     if (r[k] !== undefined && $(k)) $(k).value = r[k];
   }
   // SMTP_AUTH_CODE 为敏感字段，后端已脱敏不回传，前端不预填，仅在其留空时表示不修改。
-  // 检查窗口 < 轮询间隔 → 显示黄色告警条，提示可能漏发
+  // 检查窗口 < 轮询间隔 → 显示黄色告警条，提示可能漏发（仅固定间隔模式有意义）
+  const mode = r.schedule_mode || ($("SCHEDULE_MODE") ? $("SCHEDULE_MODE").value : "interval");
   const chk = (r.CHECK_HOURS !== undefined) ? Number(r.CHECK_HOURS) : null;
   const poll = (r.POLL_INTERVAL_MINUTES !== undefined) ? Number(r.POLL_INTERVAL_MINUTES) : null;
   const wb = $("warnbar");
-  if (chk !== null && poll !== null && !isNaN(chk) && !isNaN(poll) && chk < poll) {
+  if (mode === "interval" && chk !== null && poll !== null && !isNaN(chk) && !isNaN(poll) && chk < poll) {
     wb.textContent = "检查窗口小于轮询间隔，可能导致部分条目漏发";
     wb.classList.add("show");
   } else {
@@ -316,6 +331,8 @@ async function loadConfig() {
   if (r.schedule_mode) $("SCHEDULE_MODE").value = r.schedule_mode;
   renderTimeRows(r.schedule_times || []);
   updateScheduleUI();
+  // 多时点检查窗口提示：随固定间隔检查窗口实时联动
+  updateFixedTimesHint(chk);
 }
 async function reloadConfig() {
   await loadConfig();
@@ -366,8 +383,9 @@ function addTimeRow(val="") {
   inp.step = "60";
   const del = document.createElement("button");
   del.type = "button";
-  del.className = "row-btn danger";
-  del.textContent = "删除";
+  del.className = "row-btn del time-del";
+  del.textContent = "✕";
+  del.title = "删除此时点";
   del.onclick = () => row.remove();
   row.appendChild(inp);
   row.appendChild(del);
@@ -568,6 +586,9 @@ loadConfig();
 loadStatus();
 setInterval(tickCountdown, 1000);
 setInterval(loadStatus, 5000);
+// 固定间隔检查窗口变化时，实时更新多时点检查窗口的回落提示
+const chkEl = $("CHECK_HOURS");
+if (chkEl) chkEl.addEventListener("input", () => updateFixedTimesHint(Number(chkEl.value) || null));
 </script>
 </body>
 </html>
