@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-REM 是否无窗口模式（--show）
+REM 显示(可见)窗口模式开关：默认隐藏(无窗口)，加 --show 进入调试显示模式
 set "SHOWN=0"
 for %%a in (%*) do if /i "%%a"=="--show" set "SHOWN=1"
 
@@ -56,11 +56,12 @@ if "!READY!"=="0" (
     echo ===== %LOG% =====
     type "%LOG%"
     echo ===================
-    if "%HIDDEN%"=="1" (
-        start "RSS2Email Log" cmd /k type "%LOG%"
+    if "%SHOWN%"=="1" (
+        echo 请查看上方日志，按任意键退出...
+        pause
         exit /b 1
     )
-    pause
+    start "RSS2Email Log" cmd /k type "%LOG%"
     exit /b 1
 )
 
@@ -68,12 +69,13 @@ if "!READY!"=="0" (
 echo 服务已就绪，正在打开 %URL% ...
 start "" "%URL%"
 
-if "%HIDDEN%"=="1" (
-    echo RSS2Email 已后台启动（无窗口）。配置页面： %URL%
+if "%SHOWN%"=="1" (
+    echo.
+    echo RSS2Email 已启动（窗口模式 / DEBUG）。配置页面： %URL%
+    echo 停止服务：网页点「停止服务」，或关闭标题为 RSS2Email 的 python 窗口
+    pause
     exit /b 0
 )
 
-echo.
-echo RSS2Email 已启动。配置页面： %URL%
-echo 停止服务：网页点「停止服务」，或关闭标题为 RSS2Email 的 python 窗口
-pause
+echo RSS2Email 已后台启动（无窗口）。配置页面： %URL%
+exit /b 0
