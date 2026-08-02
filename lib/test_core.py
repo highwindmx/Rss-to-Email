@@ -1,6 +1,6 @@
 """rss_mailer 核心逻辑测试（网络全部 mock，不真实访问）。
 
-运行：pytest tests/test_core.py -q
+运行：pytest lib/test_core.py -q
 """
 import os
 import sys
@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-# 让测试能 import lib/rss_mailer
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+# 本测试位于 lib/ 内，同目录即可 import rss_mailer
+sys.path.insert(0, os.path.dirname(__file__))
 
 import rss_mailer as core
 
