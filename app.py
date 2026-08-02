@@ -94,6 +94,8 @@ def api_restart():
                 SERVER.socket.close()
         except Exception:
             pass
+        # 打标：让继承该环境变量的子进程在 __main__ 里把本次记作「重启」而非「启动」
+        os.environ["RSS2EMAIL_RESTART"] = "1"
         os.execv(sys.executable, [sys.executable, me])
 
     _delayed_exit(1.0, _do_restart)
@@ -104,6 +106,11 @@ if __name__ == "__main__":
     sched = BackgroundScheduler()
     sched.add_job(core.run_once, "interval", minutes=1)
     sched.start()
+    # 记录服务启停事件到运行日志（runs 表）；重启经 os.execv 继承 RSS2EMAIL_RESTART
+    # 环境变量，故可区分「启动」与「重启」，两者都会重新走 __main__ 落到这里。
+    is_restart = os.environ.get("RSS2EMAIL_RESTART") == "1"
+    core.log_run("start", 0, "ok", "服务重启" if is_restart else "服务启动")
+    os.environ.pop("RSS2EMAIL_RESTART", None)
     port = int(os.environ.get("WEB_PORT", 50000))
     SERVER = make_server("127.0.0.1", port, app)
     SERVER.serve_forever()

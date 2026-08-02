@@ -190,6 +190,16 @@ def test_should_log_skip_exact_10min_with_subsecond(tmp_db, no_dotenv, monkeypat
     assert core._should_log_skip() is True
 
 
+def test_startup_log_appears_in_status(tmp_db, no_dotenv):
+    """服务启动/重启通过 log_run('start', ...) 写入 runs，并在 get_status 中可见。"""
+    core.log_run("start", 0, "ok", "服务启动")
+    st = core.get_status()
+    start_rows = [r for r in st["runs"] if r["type"] == "start"]
+    assert len(start_rows) == 1
+    assert start_rows[0]["status"] == "ok"
+    assert start_rows[0]["detail"] == "服务启动"
+
+
 # ---------- run_once ----------
 def _seed_complete_config(monkeypatch):
     monkeypatch.setenv("RSS_URLS", "S|http://feed")

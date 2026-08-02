@@ -433,7 +433,8 @@ async function loadStatus(manual=false) {
     for (const x of runs) {
       const t = new Date(x.ts*1000).toLocaleString();
       const sc = ({error:"err", sent:"sent", none:"none", skip:"skip", ok:"ok"})[x.status] || "";
-      html += `<li><span class="tag">${x.type}</span><span class="tag ${sc}">${x.status}</span> ${t} · ${x.detail}</li>`;
+      const tl = ({run:"运行", skip:"心跳", test:"测试", start:"启动"})[x.type] || x.type;
+      html += `<li><span class="tag">${tl}</span><span class="tag ${sc}">${x.status}</span> ${t} · ${x.detail}</li>`;
     }
     $("statusBox").innerHTML = html || '<li style="color:#999">暂无记录</li>';
     // 错误横幅：最近一次运行出错且之后无成功发送 → 顶部醒目提示错误详情
