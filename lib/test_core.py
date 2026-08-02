@@ -200,6 +200,82 @@ def test_startup_log_appears_in_status(tmp_db, no_dotenv):
     assert start_rows[0]["detail"] == "服务启动"
 
 
+# ---------- 多时点调度（SCHEDULE_MODE=fixed_times）----------
+def test_parse_schedule_times():
+    """非法项被过滤、重复去重、结果升序且 HH:MM 两位化。"""
+    got = core.parse_schedule_times("08:00, 12:30, 08:00, 25:00, 12:61, abc, 8:5,")
+    assert got == ["08:00", "12:30"]
+    assert core.parse_schedule_times("") == []
+    assert core.parse_schedule_times("23:59") == ["23:59"]
+
+
+def test_get_next_schedule_time(tmp_db, no_dotenv, monkeypatch):
+    """下一个定时点：今日剩余取最近未来；今日全过取明日最早。"""
+    monkeypatch.setenv("SCHEDULE_MODE", "fixed_times")
+    monkeypatch.setenv("SCHEDULE_TIMES", "08:00,12:00,20:00")
+    lt = time.localtime()
+    mk = lambda h, m: time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, lt.tm_wday, lt.tm_yday, -1))
+    # 13:00 → 下一个应为 20:00 今日
+    monkeypatch.setattr(core.time, "time", lambda: mk(13, 0))
+    n1 = core.get_next_schedule_time()
+    assert abs(n1 - mk(20, 0)) < 2
+    # 21:00 → 今日全过 → 明日 08:00
+    monkeypatch.setattr(core.time, "time", lambda: mk(21, 0))
+    n2 = core.get_next_schedule_time()
+    tmr = time.localtime(mk(21, 0) + 86400)
+    exp = time.mktime((tmr.tm_year, tmr.tm_mon, tmr.tm_mday, 8, 0, 0, tmr.tm_wday, tmr.tm_yday, -1))
+    assert abs(n2 - exp) < 2
+    # 非多时点模式 → None
+    monkeypatch.setenv("SCHEDULE_MODE", "interval")
+    assert core.get_next_schedule_time() is None
+
+
+def _set_last_run(ts):
+    conn = core._conn()
+    conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES ('last_run', ?)", (str(ts),))
+    conn.commit(); conn.close()
+
+
+def test_scheduler_tick_fixed_times_fires_when_due(tmp_db, no_dotenv, monkeypatch):
+    """到定时点且 last_run 早于该点 → 触发 run_once(force=True)。"""
+    monkeypatch.setenv("SCHEDULE_MODE", "fixed_times")
+    monkeypatch.setenv("SCHEDULE_TIMES", "12:00")
+    lt = time.localtime()
+    now = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 12, 5, 0, lt.tm_wday, lt.tm_yday, -1))
+    last_run = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 11, 0, 0, lt.tm_wday, lt.tm_yday, -1))
+    monkeypatch.setattr(core.time, "time", lambda: now)
+    _set_last_run(last_run)
+    calls = []
+    monkeypatch.setattr(core, "run_once", lambda force=False: (calls.append(force) or {"status": "none"}))
+    res = core.scheduler_tick()
+    assert calls == [True]
+    assert res["status"] == "none"
+
+
+def test_scheduler_tick_fixed_times_idle_after_run(tmp_db, no_dotenv, monkeypatch):
+    """已在该点运行过（last_run >= 定时点）→ 本分钟空闲，不重复触发。"""
+    monkeypatch.setenv("SCHEDULE_MODE", "fixed_times")
+    monkeypatch.setenv("SCHEDULE_TIMES", "12:00")
+    lt = time.localtime()
+    now = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 12, 5, 0, lt.tm_wday, lt.tm_yday, -1))
+    monkeypatch.setattr(core.time, "time", lambda: now)
+    _set_last_run(now)  # last_run 已 >= 12:00 → 不应再次触发
+    calls = []
+    monkeypatch.setattr(core, "run_once", lambda force=False: (calls.append(force) or {"status": "none"}))
+    res = core.scheduler_tick()
+    assert calls == []
+    assert res["status"] == "idle"
+
+
+def test_scheduler_tick_interval_delegates(tmp_db, no_dotenv, monkeypatch):
+    """interval 模式（默认）→ 直接委托 run_once()，不强制。"""
+    monkeypatch.setenv("SCHEDULE_MODE", "interval")
+    calls = []
+    monkeypatch.setattr(core, "run_once", lambda force=False: (calls.append(force) or {"status": "skip"}))
+    core.scheduler_tick()
+    assert calls == [False]
+
+
 # ---------- run_once ----------
 def _seed_complete_config(monkeypatch):
     monkeypatch.setenv("RSS_URLS", "S|http://feed")

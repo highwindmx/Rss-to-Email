@@ -14,7 +14,8 @@ STATIC = BASE / "static"
 app = Flask(__name__, static_folder=str(STATIC))
 
 ALLOWED = {"RSS_URLS", "POLL_INTERVAL_MINUTES", "SMTP_HOST", "SMTP_PORT",
-           "SENDER_EMAIL", "SMTP_AUTH_CODE", "RECIPIENTS", "CHECK_HOURS"}
+           "SENDER_EMAIL", "SMTP_AUTH_CODE", "RECIPIENTS", "CHECK_HOURS",
+           "SCHEDULE_MODE", "SCHEDULE_TIMES"}
 
 
 @app.route("/")
@@ -104,7 +105,7 @@ def api_restart():
 
 if __name__ == "__main__":
     sched = BackgroundScheduler()
-    sched.add_job(core.run_once, "interval", minutes=1)
+    sched.add_job(core.scheduler_tick, "interval", minutes=1)
     sched.start()
     # 记录服务启停事件到运行日志（runs 表）；重启经 os.execv 继承 RSS2EMAIL_RESTART
     # 环境变量，故可区分「启动」与「重启」，两者都会重新走 __main__ 落到这里。

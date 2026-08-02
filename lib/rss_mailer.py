@@ -74,6 +74,8 @@ def load_config():
         "SMTP_AUTH_CODE": os.environ.get("SMTP_AUTH_CODE", ""),
         "RECIPIENTS": os.environ.get("RECIPIENTS", ""),
         "CHECK_HOURS": _safe_int(os.environ.get("CHECK_HOURS", 24), 24),
+        "SCHEDULE_MODE": (os.environ.get("SCHEDULE_MODE", "interval") or "interval").strip(),
+        "SCHEDULE_TIMES": os.environ.get("SCHEDULE_TIMES", "") or "",
     }
 
 
@@ -85,6 +87,8 @@ def public_config():
     cfg = load_config()
     raw = cfg.pop("SMTP_AUTH_CODE", "")
     cfg["has_smtp_auth_code"] = bool(raw)
+    # schedule_times 解析为数组，便于前端时间选择器直接渲染
+    cfg["schedule_times"] = parse_schedule_times(cfg.get("SCHEDULE_TIMES", ""))
     return cfg
 
 
@@ -165,11 +169,22 @@ def get_status():
         poll = _safe_int(load_config().get("POLL_INTERVAL_MINUTES", 60), 60)
     except (TypeError, ValueError):
         poll = 60
+    cfg = load_config()
+    mode = (cfg.get("SCHEDULE_MODE", "interval") or "interval").strip()
+    times = parse_schedule_times(cfg.get("SCHEDULE_TIMES", ""))
+    # 下次运行时间：多时点模式取最近未来时点；间隔模式取 last_run + 间隔
+    if mode == "fixed_times" and times:
+        next_run = get_next_schedule_time()
+    else:
+        next_run = (float(row[0]) + poll * 60) if row else None
     return {
         "last_run": float(row[0]) if row else None,
         "last_send": float(row_send[0]) if row_send else None,
         "sent_total": sent_total,
         "poll_interval_minutes": poll,
+        "schedule_mode": mode,
+        "schedule_times": times,
+        "next_run": next_run,
         "runs": [{"ts": r[0], "type": r[1], "count": r[2], "status": r[3], "detail": r[4]}
                  for r in runs],
     }
@@ -184,6 +199,100 @@ def should_run():
     if not row:
         return True
     return (time.time() - float(row[0])) >= poll * 60
+
+
+# ---------- 多时点调度（SCHEDULE_MODE=fixed_times）----------
+def parse_schedule_times(raw):
+    """把 .env 的 SCHEDULE_TIMES（逗号分隔 HH:MM）解析为去重、升序的列表。
+
+    非法项（非 HH:MM / 超范围 / 空）被忽略；解析失败整体返回空列表，不影响服务。
+    """
+    out = []
+    seen = set()
+    for part in (raw or "").split(","):
+        p = part.strip()
+        if not p or p in seen:
+            continue
+        m = re.match(r"^(\d{1,2}):(\d{2})$", p)
+        if not m:
+            continue
+        h, mi = int(m.group(1)), int(m.group(2))
+        if h > 23 or mi > 59:
+            continue
+        norm = f"{h:02d}:{mi:02d}"
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return sorted(out)
+
+
+def _mk_epoch_for_time(h, mi, base_ts):
+    """构造 base_ts 所在日（或跨日）的 h:mi:00 时间戳；base_ts 之后取今日，否则取明日。"""
+    lt = time.localtime(base_ts)
+    cand = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, mi, 0,
+                        lt.tm_wday, lt.tm_yday, -1))
+    return cand
+
+
+def get_next_schedule_time(now=None):
+    """返回下一个定时时点的时间戳（> now），或 None（非多时点模式 / 未配置时点）。
+
+    若今日所有时点已过，则取明日最早时点。
+    """
+    cfg = load_config()
+    if (cfg.get("SCHEDULE_MODE", "interval") or "interval") != "fixed_times":
+        return None
+    times = parse_schedule_times(cfg.get("SCHEDULE_TIMES", ""))
+    if not times:
+        return None
+    now = time.time() if now is None else now
+    future = [t for t in (_mk_epoch_for_time(*map(int, x.split(":")), now) for x in times)
+              if t > now]
+    if future:
+        return min(future)
+    # 今日全部已过 → 明日最早时点
+    tomorrow = now + 86400
+    h, mi = map(int, times[0].split(":"))
+    return _mk_epoch_for_time(h, mi, tomorrow)
+
+
+def scheduler_tick():
+    """每分钟由 APScheduler 调用：按 SCHEDULE_MODE 决定本次是否真正抓取。
+
+    - interval（默认）：直接 run_once()，由 should_run() 自节流。
+    - fixed_times：找到「最近一个 <= now 的定时点」，若 last_run 早于它（含服务宕机错过的情况）
+      则补跑 run_once(force=True)；否则本分钟空闲（不写任何日志，避免刷屏）。
+    """
+    cfg = load_config()
+    mode = (cfg.get("SCHEDULE_MODE", "interval") or "interval").strip()
+    if mode != "fixed_times":
+        return run_once()
+    times = parse_schedule_times(cfg.get("SCHEDULE_TIMES", ""))
+    if not times:
+        return {"status": "idle", "detail": "未配置定时时点"}
+    now = time.time()
+    # 最近一个 <= now 的定时点（优先今日，倒序找第一个 <= now；否则取昨日最后一个）
+    lt = time.localtime(now)
+    last_sched = None
+    for t in sorted(times, reverse=True):
+        h, mi = map(int, t.split(":"))
+        cand = _mk_epoch_for_time(h, mi, now)
+        if cand <= now:
+            last_sched = cand
+            break
+    if last_sched is None:
+        lt_y = time.localtime(now - 86400)
+        h, mi = map(int, sorted(times)[-1].split(":"))
+        last_sched = time.mktime((lt_y.tm_year, lt_y.tm_mon, lt_y.tm_mday, h, mi, 0,
+                                  lt_y.tm_wday, lt_y.tm_yday, -1))
+    conn = _conn()
+    row = conn.execute("SELECT v FROM meta WHERE k='last_run'").fetchone()
+    conn.close()
+    last_run = float(row[0]) if row else 0.0
+    if last_run < last_sched - 1:  # 1 秒容差，避免边界抖动
+        return run_once(force=True)
+    return {"status": "idle"}
 
 
 def mark_run():

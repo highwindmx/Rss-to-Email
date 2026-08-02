@@ -8,6 +8,9 @@
 - 网页前端：配置订阅源 / 轮询间隔 / 邮箱，单独或批量测试抓取，查看运行状态与历史记录
 - 前端实时显示后端在线 / 离线状态；后端离线时自动禁用「立即运行 / 重启服务 / 停止服务」操作
 - 自节流调度：APScheduler 每分钟 tick，未到轮询间隔则跳过本次
+- **两种触发方式（二选一）**：
+  - `interval`（默认）：按 `POLL_INTERVAL_MINUTES` 固定间隔轮询
+  - `fixed_times`：在 `SCHEDULE_TIMES` 指定的多个时刻（如 `08:00,12:00,20:00`）强制抓取推送；若服务刚好宕机错过某个时点，恢复后会自动补跑一次
 - 去重：按条目 guid 落库，避免重复推送
 - 邮件格式：主题 `RSS 更新 YYYY-MM-DD HH:MM（N条）`；正文每条 `N. 【源标题】 条目标题` + 摘要（≤100 字）
 - 抓取带超时（连接 5s / 读取 `FETCH_TIMEOUT` 默认 15s），多源并发抓取，避免单源挂起阻塞整轮
@@ -39,7 +42,9 @@ python -m venv .venv
 复制 `.env.example` 为 `.env` 并填写：
 
 - `RSS_URLS`：多个源用逗号分隔，格式 `标题|url`（标题可空；留空则邮件回退用频道自身标题）
-- `POLL_INTERVAL_MINUTES`：轮询间隔（分钟）
+- `POLL_INTERVAL_MINUTES`：轮询间隔（分钟），`SCHEDULE_MODE=interval` 时生效
+- `SCHEDULE_MODE`：触发方式，`interval`（默认，固定间隔）或 `fixed_times`（每日多时点）
+- `SCHEDULE_TIMES`：多时点模式的定时时刻，逗号分隔 `HH:MM`（24 小时制），如 `08:00,12:00,20:00`；仅 `SCHEDULE_MODE=fixed_times` 生效
 - `CHECK_HOURS`：只推送最近 N 小时内的条目，更早的直接标为已处理
 - `SMTP_HOST` / `SMTP_PORT` / `SENDER_EMAIL` / `SMTP_AUTH_CODE`：发件邮箱（用授权码，不是登录密码）
 - `RECIPIENTS`：目标邮箱，多个用逗号分隔

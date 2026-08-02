@@ -106,6 +106,29 @@
     </div>
 
     <div class="card">
+      <h2>触发方式</h2>
+      <p class="hint">决定「何时去抓取并推送」：固定间隔按分钟轮询；每日多时点则在你指定的时刻强制抓取（不受间隔限制）。两种模式二选一。</p>
+      <div class="row">
+        <div>
+          <label>触发模式</label>
+          <select id="SCHEDULE_MODE">
+            <option value="interval">固定间隔（按分钟轮询）</option>
+            <option value="fixed_times">每日多时点（指定时刻）</option>
+          </select>
+        </div>
+      </div>
+      <div id="intervalBox" style="margin-top:10px">
+        <p class="hint">当前为「固定间隔」模式：按上方「轮询间隔（分钟）」周期性抓取。</p>
+      </div>
+      <div id="fixedTimesBox" style="display:none; margin-top:10px">
+        <label>每日定时时点（多个，24 小时制 HH:MM）</label>
+        <div id="scheduleTimes"></div>
+        <button type="button" class="ghost add-btn" style="margin-top:6px" onclick="addTimeRow()">+ 添加时点</button>
+        <p class="hint" style="margin-top:8px">每到指定时刻强制抓取并推送一次（不受轮询间隔节流；若服务刚好宕机错过，恢复后会自动补跑一次）。</p>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>RSS 订阅源与测试</h2>
       <label>RSS 订阅源（每行：左侧填「源标题」，将显示在邮件每条规定前的【】内，可选；右侧填链接。输入框失焦自动校验，每行「测」可单独测试）</label>
       <div id="feedList"></div>
@@ -149,6 +172,7 @@
       <div id="warnbar" class="warnbar"></div>
       <div id="errbar" class="errbar"></div>
       <div class="stats">
+        <div class="stat"><div class="stat-k">触发方式</div><div class="stat-v" id="st-mode">—</div></div>
         <div class="stat"><div class="stat-k">上次发送时间</div><div class="stat-v" id="st-last">—</div></div>
         <div class="stat"><div class="stat-k">累计已发条目</div><div class="stat-v" id="st-total">—</div></div>
         <div class="stat"><div class="stat-k">上次发送条数</div><div class="stat-v" id="st-lastcount">—</div></div>
@@ -173,10 +197,10 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const FIELD_KEYS = ["POLL_INTERVAL_MINUTES","CHECK_HOURS","SMTP_HOST","SMTP_PORT","SENDER_EMAIL","RECIPIENTS"];
+const FIELD_KEYS = ["POLL_INTERVAL_MINUTES","CHECK_HOURS","SMTP_HOST","SMTP_PORT","SENDER_EMAIL","RECIPIENTS","SCHEDULE_MODE"];
 
 // 运行状态（实时刷新）
-const state = { lastRun: null, intervalMin: 60 };
+const state = { lastRun: null, intervalMin: 60, nextRun: null, scheduleMode: "interval" };
 
 // 后端在线状态监测
 const FAIL_THRESHOLD = 2;
@@ -288,6 +312,10 @@ async function loadConfig() {
   } else {
     wb.classList.remove("show");
   }
+  // 触发方式：渲染模式 + 动态时点列表
+  if (r.schedule_mode) $("SCHEDULE_MODE").value = r.schedule_mode;
+  renderTimeRows(r.schedule_times || []);
+  updateScheduleUI();
 }
 async function reloadConfig() {
   await loadConfig();
@@ -297,6 +325,13 @@ async function saveConfig() {
   const payload = { RSS_URLS: collectFeedSpecs().join(",") };
   for (const k of FIELD_KEYS) {
     if ($(k)) payload[k] = $(k).value;
+  }
+  // 触发方式：多时点模式下把动态时间选择器的值拼成逗号字符串
+  const modeEl = $("SCHEDULE_MODE");
+  if (modeEl && modeEl.value === "fixed_times") {
+    payload["SCHEDULE_TIMES"] = collectTimeRows().join(",");
+  } else if (modeEl) {
+    payload["SCHEDULE_TIMES"] = "";  // 非多时点模式清空时点，避免遗留
   }
   // 仅当授权码输入框有值时才提交（留空表示不修改，后端会剔除）
   const codeEl = $("SMTP_AUTH_CODE");
@@ -313,6 +348,46 @@ async function saveConfig() {
     loadConfig();
   }
 }
+
+// ---------- 触发方式：动态时点选择器 ----------
+function renderTimeRows(times) {
+  const box = $("scheduleTimes");
+  box.innerHTML = "";
+  const list = (times && times.length) ? times : [""];
+  for (const t of list) addTimeRow(t);
+}
+function addTimeRow(val="") {
+  const box = $("scheduleTimes");
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex; align-items:center; gap:8px; margin:6px 0";
+  const inp = document.createElement("input");
+  inp.type = "time";
+  inp.value = val || "";
+  inp.step = "60";
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "row-btn danger";
+  del.textContent = "删除";
+  del.onclick = () => row.remove();
+  row.appendChild(inp);
+  row.appendChild(del);
+  box.appendChild(row);
+}
+function collectTimeRows() {
+  return Array.from(document.querySelectorAll("#scheduleTimes input[type=time]"))
+    .map(el => (el.value || "").trim())
+    .filter(v => /^\d{1,2}:\d{2}$/.test(v));
+}
+function updateScheduleUI() {
+  const mode = $("SCHEDULE_MODE") ? $("SCHEDULE_MODE").value : "interval";
+  $("fixedTimesBox").style.display = (mode === "fixed_times") ? "block" : "none";
+  $("intervalBox").style.display   = (mode === "fixed_times") ? "none"  : "block";
+}
+// 模式切换即时联动显示（脚本位于 body 末尾，元素已就绪，直接绑定）
+(function () {
+  const sel = $("SCHEDULE_MODE");
+  if (sel) sel.addEventListener("change", updateScheduleUI);
+})();
 function escapeHtml(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
 function renderTestResults(results) {
@@ -423,6 +498,11 @@ async function loadStatus(manual=false) {
     setBackendStatus(true);
     state.lastRun = r.last_run;
     state.intervalMin = r.poll_interval_minutes || 60;
+    state.nextRun = r.next_run;
+    state.scheduleMode = r.schedule_mode || "interval";
+    $("st-mode").textContent = (state.scheduleMode === "fixed_times")
+      ? ("每日多时点" + (r.schedule_times && r.schedule_times.length ? "（" + r.schedule_times.join("、") + "）" : ""))
+      : "固定间隔";
     // 「上次发送时间」展示 last_send（仅实际发信时更新），而非 last_run（含空跑），避免误导
     $("st-last").textContent = r.last_send ? new Date(r.last_send*1000).toLocaleString() : "尚未发送";
     $("st-total").textContent = (r.sent_total ?? 0) + " 条";
@@ -459,9 +539,8 @@ async function loadStatus(manual=false) {
 }
 function tickCountdown() {
   const el = $("st-countdown");
-  if (!state.lastRun) { el.textContent = "尚未运行"; return; }
-  const next = state.lastRun + state.intervalMin * 60;
-  let rem = Math.floor(next - Date.now()/1000);
+  if (state.nextRun == null) { el.textContent = "—"; return; }
+  let rem = Math.floor(state.nextRun - Date.now()/1000);
   if (rem <= 0) { el.textContent = "即将发送"; return; }
   const m = Math.floor(rem/60), s = rem % 60;
   el.textContent = `${m} 分 ${String(s).padStart(2,"0")} 秒`;
