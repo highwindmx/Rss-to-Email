@@ -3,6 +3,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = Path(__file__).parent
 ROOT = HERE.parent  # 项目根目录（本文件位于 lib/ 下，.env 与 rss_state.db 都在根）
@@ -12,10 +13,27 @@ try:
 except Exception:
     pass
 
-import os
-
 BASE = ROOT
 DB_PATH = os.environ.get("RSS_STATE_DB", str(BASE / "rss_state.db"))
+
+
+# ---------- 通用工具 ----------
+def _safe_int(value, default=0):
+    """把环境变量等可能非整型的输入安全地转为 int。
+
+    - None / 空串 / 仅空白  → 返回 default
+    - 无法解析为整数的字符串（如 "abc"、"3.5"） → 返回 default
+    - 否则返回 int(str(value).strip())
+    """
+    if value is None:
+        return default
+    s = str(value).strip()
+    if not s:
+        return default
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        return default
 
 
 # ---------- 配置读写 ----------
@@ -36,6 +54,12 @@ def _parse_feeds(raw):
 
 
 def load_config():
+    # 每次都从磁盘重新加载 .env，避免「直接改 .env 后不重启服务就看不到更新」的困惑
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(ROOT / ".env", override=True)
+    except Exception:
+        pass
     raw = os.environ.get("RSS_URLS") or os.environ.get("RSS_URL", "")
     feeds = _parse_feeds(raw)
     urls = [f["url"] for f in feeds]
@@ -43,14 +67,25 @@ def load_config():
         "RSS_URLS": raw,
         "feeds": feeds,
         "urls": urls,
-        "POLL_INTERVAL_MINUTES": int(os.environ.get("POLL_INTERVAL_MINUTES", 60)),
+        "POLL_INTERVAL_MINUTES": _safe_int(os.environ.get("POLL_INTERVAL_MINUTES", 60), 60),
         "SMTP_HOST": os.environ.get("SMTP_HOST", ""),
-        "SMTP_PORT": int(os.environ.get("SMTP_PORT", 465)),
+        "SMTP_PORT": _safe_int(os.environ.get("SMTP_PORT", 465), 465),
         "SENDER_EMAIL": os.environ.get("SENDER_EMAIL", ""),
         "SMTP_AUTH_CODE": os.environ.get("SMTP_AUTH_CODE", ""),
         "RECIPIENTS": os.environ.get("RECIPIENTS", ""),
-        "CHECK_HOURS": int(os.environ.get("CHECK_HOURS", 24)),
+        "CHECK_HOURS": _safe_int(os.environ.get("CHECK_HOURS", 24), 24),
     }
+
+
+def public_config():
+    """对外（前端）配置：剔除敏感字段 SMTP_AUTH_CODE，并以布尔标记提示其是否已设置。
+
+    供 GET / POST /api/config 使用，避免把授权码明文回传前端。
+    """
+    cfg = load_config()
+    raw = cfg.pop("SMTP_AUTH_CODE", "")
+    cfg["has_smtp_auth_code"] = bool(raw)
+    return cfg
 
 
 def set_config(updates: dict):
@@ -87,6 +122,21 @@ def _conn():
     return conn
 
 
+# 运行记录瘦身：跳过类（心跳）记录最多每 10 分钟写一条，避免 runs 表被每分钟的 skip 刷屏。
+# 真正有意义的记录（已发送 / 无新条目 / 错误 / 测试）不受影响，照常写入。
+RUN_LOG_MINUTES = 10
+
+
+def _should_log_skip():
+    """距上一条 runs 记录 ≥ RUN_LOG_MINUTES 分钟才允许写 skip（心跳）记录。"""
+    conn = _conn()
+    row = conn.execute("SELECT ts FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    if not row:
+        return True
+    return (time.time() - float(row[0])) >= RUN_LOG_MINUTES * 60
+
+
 def log_run(rtype, count, status, detail):
     conn = _conn()
     conn.execute("INSERT INTO runs(ts,type,count,status,detail) VALUES (?,?,?,?,?)",
@@ -103,7 +153,7 @@ def get_status():
         "SELECT ts,type,count,status,detail FROM runs ORDER BY id DESC LIMIT 20").fetchall()
     conn.close()
     try:
-        poll = int(load_config().get("POLL_INTERVAL_MINUTES", 60) or 60)
+        poll = _safe_int(load_config().get("POLL_INTERVAL_MINUTES", 60), 60)
     except (TypeError, ValueError):
         poll = 60
     return {
@@ -120,7 +170,7 @@ def should_run():
     conn = _conn()
     row = conn.execute("SELECT v FROM meta WHERE k='last_run'").fetchone()
     conn.close()
-    poll = int(os.environ.get("POLL_INTERVAL_MINUTES", 60))
+    poll = _safe_int(os.environ.get("POLL_INTERVAL_MINUTES", 60), 60)
     if not row:
         return True
     return (time.time() - float(row[0])) >= poll * 60
@@ -133,29 +183,103 @@ def mark_run():
     conn.close()
 
 
-# ---------- 抓取 / 发送 ----------
-def fetch_new(feeds, check_hours):
+# ---------- 抓取 ----------
+def _fetch_feed(url, timeout=None):
+    """带超时地抓取 RSS/Atom，返回 feedparser 解析结果。
+
+    - timeout 为 None 时，使用 (连接 5s, 读取 FETCH_TIMEOUT 默认 15s) 的元组超时。
+    - 网络/解析异常向上抛，由调用方 try 处理（不在此吞异常）。
+    """
+    import requests
+
+    if timeout is None:
+        timeout = (5, _safe_int(os.environ.get("FETCH_TIMEOUT"), 15))
+    resp = requests.get(url, timeout=timeout, headers={"User-Agent": "RSS2Email/1.0"})
+    resp.raise_for_status()
+    return feedparser.parse(resp.content)
+
+
+def _is_first_run():
+    """判断是否为首次运行：meta 无 last_run 或 sent 表为空 → True。
+
+    首跑用更大时间窗口，避免一次性把历史积压全部标为「已读」导致漏发/多发。
+    """
     conn = _conn()
-    sent = {r[0] for r in conn.execute("SELECT guid FROM sent")}
-    cutoff = time.time() - check_hours * 3600
-    new, old = [], []
-    for feed in feeds:
-        url = feed.get("url", "")
-        if not url:
-            continue
-        fp = feedparser.parse(url)
+    row = conn.execute("SELECT v FROM meta WHERE k='last_run'").fetchone()
+    sent_total = conn.execute("SELECT COUNT(*) FROM sent").fetchone()[0]
+    conn.close()
+    return (not row) or (sent_total == 0)
+
+
+def _fetch_one(feed, cutoff, first_run):
+    """并发 worker：抓取单个源，按 guid 去重 + 时间窗口筛出新增。
+
+    - 已 in sent 的 guid → 计入 old（由主线程回写 sent）。
+    - 发布时间早于 cutoff（窗口外）→ 计入 old。
+    - 无发布时间(pub 为 None)的条目：作为 new 候选（不计入 old/sent），
+      待 run_once 发送后再落库，避免未发送就被误标为已读。
+    - 单源异常 try 吞掉返回空，避免拖垮整轮。
+    """
+    url = feed.get("url", "")
+    if not url:
+        return {"new": [], "old": []}
+    try:
+        fp = _fetch_feed(url)
         ch_title = (fp.feed or {}).get("title", "")
         src_title = feed.get("title", "") or ch_title
+        # 各 worker 使用独立连接读取 sent 集合（SQLite 连接非线程安全）
+        conn = _conn()
+        sent = {r[0] for r in conn.execute("SELECT guid FROM sent")}
+        conn.close()
+        new, old = [], []
         for e in fp.entries:
             guid = e.get("id") or e.get("link")
             pub = e.get("published_parsed") or e.get("updated_parsed")
-            if guid in sent or (pub and time.mktime(pub) < cutoff):
+            pub_ts = time.mktime(pub) if pub else None
+            if guid in sent:
                 old.append(guid)
                 continue
+            if pub_ts is not None and pub_ts < cutoff:
+                old.append(guid)
+                continue
+            # 无发布时间或仍在窗口内 → 作 new 候选（不在此处入库 sent）
             new.append({"e": e, "title": src_title})
-    conn.executemany("INSERT OR IGNORE INTO sent(guid) VALUES (?)", [(g,) for g in old])
-    conn.commit()
-    conn.close()
+        return {"new": new, "old": old}
+    except Exception:
+        # 单源异常吞掉，返回空，不拖垮整轮
+        return {"new": [], "old": []}
+
+
+def fetch_new(feeds, check_hours):
+    """并发抓取所有源的新条目。
+
+    - 读取 sent 集合、判定首跑。
+    - 首跑窗口 = max(check_hours, 168) 小时（至少 7 天）；非首跑用 check_hours。
+    - 用 ThreadPoolExecutor 并发抓取；worker 仅读取 sent，不写库。
+    - 主线程汇总 new/old，并把 old(guid) 回写 sent（SQLite 连接非线程安全，落库回主线程）。
+    """
+    first_run = _is_first_run()
+    window_hours = max(check_hours, 168) if first_run else check_hours
+    cutoff = time.time() - window_hours * 3600
+    new, old = [], []
+    if not feeds:
+        return new
+    with ThreadPoolExecutor(max_workers=min(len(feeds), 8)) as ex:
+        futures = [ex.submit(_fetch_one, f, cutoff, first_run) for f in feeds]
+        for fu in futures:
+            try:
+                res = fu.result()
+            except Exception:
+                res = {"new": [], "old": []}
+            new.extend(res.get("new", []))
+            old.extend(res.get("old", []))
+    # 落库回主线程（SQLite 连接非线程安全）
+    if old:
+        conn = _conn()
+        conn.executemany("INSERT OR IGNORE INTO sent(guid) VALUES (?)",
+                         [(g,) for g in old])
+        conn.commit()
+        conn.close()
     return new
 
 
@@ -217,11 +341,13 @@ def run_once(force=False):
     try:
         if not cfg["urls"] or "example.com" in cfg["RSS_URLS"] or "your_qq" in cfg["SENDER_EMAIL"]:
             msg = "配置未完成：请填写真实 RSS_URLS / SENDER_EMAIL"
-            log_run("run", 0, "skip", msg)
+            if _should_log_skip():
+                log_run("run", 0, "skip", msg)
             return {"status": "skip", "detail": msg}
         if not force and not should_run():
             msg = f"未到轮询间隔（{cfg['POLL_INTERVAL_MINUTES']} 分）"
-            log_run("run", 0, "skip", msg)
+            if _should_log_skip():
+                log_run("run", 0, "skip", msg)
             return {"status": "skip", "detail": msg}
         items = fetch_new(cfg["feeds"], cfg["CHECK_HOURS"])
         if items:
@@ -248,7 +374,7 @@ def check_feed(url):
     if not url or not url.strip():
         return {"url": url, "error": "缺少 url"}
     try:
-        feed = feedparser.parse(url)
+        feed = _fetch_feed(url)
         ch = feed.feed or {}
         if feed.bozo:
             return {"url": url, "title": ch.get("title", ""),
@@ -267,7 +393,7 @@ def test_fetch(urls=None):
     result = []
     for url in urls:
         try:
-            feed = feedparser.parse(url)
+            feed = _fetch_feed(url)
             ch = feed.feed or {}
             sample = [{"title": e.get("title", ""), "link": e.get("link", "")}
                       for e in feed.entries[:5]]

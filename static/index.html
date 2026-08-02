@@ -59,12 +59,22 @@
   .stat-v { font-size: 18px; font-weight: 700; color: #222; }
   .stat-v.cd { color: #2f6fed; }
   .ctrl-row { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  /* 顶部在线状态条 */
+  .backendBar { position: sticky; top: 0; z-index: 50; padding: 8px 14px; font-size: 13px; font-weight: 600;
+                margin: 0 0 12px; border-radius: 0 0 8px 8px; }
+  .backend-online { background: #e8f6ec; color: #1a7f37; border-bottom: 1px solid #b7e3c2; }
+  .backend-offline { background: #fdecec; color: #c0392b; border-bottom: 2px solid #c0392b; }
+  /* 检查窗口告警条 */
+  .warnbar { display: none; background: #fff7d6; color: #8a6d00; border: 1px solid #f0d98a;
+             border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
+  .warnbar.show { display: block; }
 </style>
 </head>
 <body>
+<div id="backendBar" class="backendBar backend-online">● 后端在线</div>
 <div class="wrap">
   <h1>RSS2Email 配置</h1>
-  <div class="sub">本地服务 · http://127.0.0.1:50000 · 配置存于 .env，运行状态存于 rss_state.db</div>
+  <div id="subBar" class="sub">本地服务 · 配置存于 .env，运行状态存于 rss_state.db</div>
 
   <div class="cols">
   <!-- ============ 配置区（左） ============ -->
@@ -113,11 +123,12 @@
       <label>发件邮箱</label>
       <input id="SENDER_EMAIL" placeholder="your_qq@qq.com">
       <label>SMTP 授权码（非登录密码）</label>
-      <input id="SMTP_AUTH_CODE" type="password">
+      <input id="SMTP_AUTH_CODE" type="password" placeholder="已设置则留空不修改" autocomplete="new-password">
       <label>目标邮箱（多个用逗号分隔）</label>
       <input id="RECIPIENTS" placeholder="a@x.com,b@y.com">
       <div style="margin-top:14px">
         <button class="primary" onclick="saveConfig()">保存配置</button>
+        <button class="ghost" onclick="reloadConfig()">重新加载配置</button>
       </div>
     </div>
   </div>
@@ -126,6 +137,7 @@
   <div id="tab-run" class="pane pane-run tabpane">
     <div class="card">
       <h2>运行状态</h2>
+      <div id="warnbar" class="warnbar"></div>
       <div class="stats">
         <div class="stat"><div class="stat-k">上次发送时间</div><div class="stat-v" id="st-last">—</div></div>
         <div class="stat"><div class="stat-k">累计已发条目</div><div class="stat-v" id="st-total">—</div></div>
@@ -134,9 +146,9 @@
       </div>
       <div class="ctrl-row">
         <button class="ghost" onclick="loadStatus(true)">刷新状态</button>
-        <button class="primary" onclick="runNow()">立即运行（强制）</button>
-        <button class="warn" onclick="restartService()">重启服务</button>
-        <button class="danger" onclick="stopService()">停止服务</button>
+        <button id="runNowBtn" class="primary" onclick="runNow()">立即运行（强制）</button>
+        <button id="restartBtn" class="warn" onclick="restartService()">重启服务</button>
+        <button id="stopBtn" class="danger" onclick="stopService()">停止服务</button>
       </div>
       <div id="msg"></div>
     </div>
@@ -151,12 +163,38 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const FIELD_KEYS = ["POLL_INTERVAL_MINUTES","CHECK_HOURS","SMTP_HOST","SMTP_PORT","SENDER_EMAIL","SMTP_AUTH_CODE","RECIPIENTS"];
+const FIELD_KEYS = ["POLL_INTERVAL_MINUTES","CHECK_HOURS","SMTP_HOST","SMTP_PORT","SENDER_EMAIL","RECIPIENTS"];
 
 // 运行状态（实时刷新）
 const state = { lastRun: null, intervalMin: 60 };
 
+// 后端在线状态监测
+const FAIL_THRESHOLD = 2;
+let failCount = 0;
+let backendOnline = true;
+let hasLoadedOnce = false;
+
 function escapeAttr(s){ return (s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;"); }
+
+function setBackendStatus(online) {
+  backendOnline = online;
+  const bar = $("backendBar");
+  if (online) {
+    bar.className = "backendBar backend-online";
+    bar.textContent = "● 后端在线";
+  } else {
+    bar.className = "backendBar backend-offline";
+    // 首次从未启动过 → 强调「后端未启动」；曾在线后离线 → 提示可能显示旧数据
+    bar.textContent = hasLoadedOnce
+      ? "● 后端离线：前端可能仍在显示旧数据，请检查是否已关闭 start_web.bat"
+      : "● 后端未启动：请双击 start_web.bat 启动服务";
+  }
+  // 离线时禁用运行 / 重启 / 停止 三个按钮
+  ["runNowBtn", "restartBtn", "stopBtn"].forEach(id => {
+    const b = $(id);
+    if (b) b.disabled = !online;
+  });
+}
 
 function addFeedRow(val = {title:"", url:""}) {
   const list = $("feedList");
@@ -229,16 +267,41 @@ async function loadConfig() {
   for (const k of FIELD_KEYS) {
     if (r[k] !== undefined && $(k)) $(k).value = r[k];
   }
+  // SMTP_AUTH_CODE 为敏感字段，后端已脱敏不回传，前端不预填，仅在其留空时表示不修改。
+  // 检查窗口 < 轮询间隔 → 显示黄色告警条，提示可能漏发
+  const chk = (r.CHECK_HOURS !== undefined) ? Number(r.CHECK_HOURS) : null;
+  const poll = (r.POLL_INTERVAL_MINUTES !== undefined) ? Number(r.POLL_INTERVAL_MINUTES) : null;
+  const wb = $("warnbar");
+  if (chk !== null && poll !== null && !isNaN(chk) && !isNaN(poll) && chk < poll) {
+    wb.textContent = "检查窗口小于轮询间隔，可能导致部分条目漏发";
+    wb.classList.add("show");
+  } else {
+    wb.classList.remove("show");
+  }
+}
+async function reloadConfig() {
+  await loadConfig();
+  showMsg("已重新从服务器（.env）加载配置", false);
 }
 async function saveConfig() {
   const payload = { RSS_URLS: collectFeedSpecs().join(",") };
   for (const k of FIELD_KEYS) {
     if ($(k)) payload[k] = $(k).value;
   }
-  const r = await fetch("/api/config", {
+  // 仅当授权码输入框有值时才提交（留空表示不修改，后端会剔除）
+  const codeEl = $("SMTP_AUTH_CODE");
+  if (codeEl && codeEl.value.trim()) payload["SMTP_AUTH_CODE"] = codeEl.value;
+  // 后端 POST /api/config 现在直接返回脱敏后的配置对象（public_config），无 ok 字段
+  const resp = await fetch("/api/config", {
     method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)
-  }).then(x => x.json());
-  showMsg(r.ok ? "配置已保存" : "保存失败", !r.ok);
+  });
+  const r = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    showMsg("保存失败：" + (r.detail || JSON.stringify(r)), true);
+  } else {
+    showMsg("配置已保存", false);
+    loadConfig();
+  }
 }
 function escapeHtml(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
@@ -345,21 +408,31 @@ async function runNow() {
 async function loadStatus(manual=false) {
   try {
     const r = await fetch("/api/status").then(x => x.json());
+    hasLoadedOnce = true;
+    failCount = 0;
+    setBackendStatus(true);
     state.lastRun = r.last_run;
-  state.intervalMin = r.poll_interval_minutes || 60;
-  $("st-last").textContent = r.last_run ? new Date(r.last_run*1000).toLocaleString() : "尚未运行";
-  $("st-total").textContent = (r.sent_total ?? 0) + " 条";
-  const lastSent = (r.runs || []).find(x => x.status === "sent");
-  $("st-lastcount").textContent = lastSent ? (lastSent.count + " 条") : "—";
-  let html = "";
-  for (const x of (r.runs || [])) {
-    const t = new Date(x.ts*1000).toLocaleString();
-    html += `<li><span class="tag">${x.type}</span><span class="tag">${x.status}</span> ${t} · ${x.detail}</li>`;
-  }
-  $("statusBox").innerHTML = html || '<li style="color:#999">暂无记录</li>';
+    state.intervalMin = r.poll_interval_minutes || 60;
+    $("st-last").textContent = r.last_run ? new Date(r.last_run*1000).toLocaleString() : "尚未运行";
+    $("st-total").textContent = (r.sent_total ?? 0) + " 条";
+    const lastSent = (r.runs || []).find(x => x.status === "sent");
+    $("st-lastcount").textContent = lastSent ? (lastSent.count + " 条") : "—";
+    let html = "";
+    for (const x of (r.runs || [])) {
+      const t = new Date(x.ts*1000).toLocaleString();
+      html += `<li><span class="tag">${x.type}</span><span class="tag">${x.status}</span> ${t} · ${x.detail}</li>`;
+    }
+    $("statusBox").innerHTML = html || '<li style="color:#999">暂无记录</li>';
     tickCountdown();
     if (manual) showMsg("已刷新状态 · " + new Date().toLocaleTimeString(), false);
   } catch (e) {
+    // 失败计数：首次失败（含首屏加载）直接置阈值，立即判离线
+    if (failCount === 0) {
+      failCount = FAIL_THRESHOLD;
+    } else {
+      failCount += 1;
+    }
+    if (failCount >= FAIL_THRESHOLD) setBackendStatus(false);
     if (manual) showMsg("刷新失败：服务可能未启动或已停止，请双击 start_web.bat 重启。", true);
   }
 }
@@ -389,6 +462,8 @@ async function restartService() {
 }
 
 // 初始化 + 自动刷新
+$("subBar").textContent = `本地服务 · ${window.location.origin} · 配置存于 .env，运行状态存于 rss_state.db`;
+setBackendStatus(true);
 loadConfig();
 loadStatus();
 setInterval(tickCountdown, 1000);

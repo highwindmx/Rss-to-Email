@@ -21,15 +21,18 @@ def index():
 
 @app.route("/api/config", methods=["GET"])
 def get_config():
-    return jsonify(core.load_config())
+    return jsonify(core.public_config())
 
 
 @app.route("/api/config", methods=["POST"])
 def post_config():
     data = request.get_json(silent=True) or {}
+    # 授权码留空表示「不修改」，剔除以免用空串覆盖原值
+    if "SMTP_AUTH_CODE" in data and not str(data["SMTP_AUTH_CODE"]).strip():
+        data.pop("SMTP_AUTH_CODE")
     upd = {k: str(v) for k, v in data.items() if k in ALLOWED}
     core.set_config(upd)
-    return jsonify({"ok": True, "config": core.load_config()})
+    return jsonify(core.public_config())
 
 
 @app.route("/api/test", methods=["POST"])
@@ -87,4 +90,4 @@ if __name__ == "__main__":
     sched = BackgroundScheduler()
     sched.add_job(core.run_once, "interval", minutes=1)
     sched.start()
-    app.run(host="127.0.0.1", port=50000, debug=False)
+    app.run(host="127.0.0.1", port=int(os.environ.get("WEB_PORT", 50000)), debug=False)
