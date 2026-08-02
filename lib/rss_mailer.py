@@ -128,13 +128,21 @@ RUN_LOG_MINUTES = 10
 
 
 def _should_log_skip():
-    """距上一条 runs 记录 ≥ RUN_LOG_MINUTES 分钟才允许写 skip（心跳）记录。"""
+    """距上一条 runs 记录 ≥ RUN_LOG_MINUTES 分钟才允许写 skip（心跳）记录。
+
+    注意：now 与 last 都先向下取整到调度粒度(60s)再比较，避免 last 的亚秒精度
+    与 1 分钟调度粒度叠加，导致心跳实际间隔漂成 11 分钟而非 10 分钟（亚秒使
+    “正好 +600s” 的 tick 差 0.x 秒不达标，被迫顺延到下一 tick）。
+    """
     conn = _conn()
     row = conn.execute("SELECT ts FROM runs ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
     if not row:
         return True
-    return (time.time() - float(row[0])) >= RUN_LOG_MINUTES * 60
+    period = 60  # 与 APScheduler 的 1 分钟 tick 对齐
+    last_block = int(float(row[0]) // period) * period
+    now_block = int(time.time() // period) * period
+    return (now_block - last_block) >= RUN_LOG_MINUTES * 60
 
 
 def log_run(rtype, count, status, detail):

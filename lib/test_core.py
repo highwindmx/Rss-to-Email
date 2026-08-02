@@ -174,6 +174,22 @@ def test_should_run_bad_env(tmp_db, no_dotenv, monkeypatch):
     assert core.should_run() is False
 
 
+def test_should_log_skip_exact_10min_with_subsecond(tmp_db, no_dotenv, monkeypatch):
+    """亚秒精度的 last 记录不应让心跳间隔漂成 11 分钟：+600s 触发，+595s 不触发。"""
+    base = (1_700_000_000 // 60) * 60  # 整分钟基准（60 的整数倍）
+    last_ts = base + 0.3  # 带亚秒的真实写入时刻
+    conn = core._conn()
+    conn.execute("INSERT INTO runs(ts,type,count,status,detail) VALUES (?,?,?,?,?)",
+                 (last_ts, "run", 0, "skip", "x"))
+    conn.commit(); conn.close()
+    # +595s：未到 10 分钟 → False
+    monkeypatch.setattr(core.time, "time", lambda: last_ts + 595)
+    assert core._should_log_skip() is False
+    # +600s：整 10 分钟 → True（修复前亚秒使其差 0.x 秒不达标，顺延到 +660s）
+    monkeypatch.setattr(core.time, "time", lambda: last_ts + 600)
+    assert core._should_log_skip() is True
+
+
 # ---------- run_once ----------
 def _seed_complete_config(monkeypatch):
     monkeypatch.setenv("RSS_URLS", "S|http://feed")
